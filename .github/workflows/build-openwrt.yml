@@ -5,6 +5,7 @@
 # See /LICENSE for more information.
 #
 # https://github.com/P3TERX/Actions-OpenWrt
+# https://p3terx.com/archives/build-openwrt-with-github-actions.html
 # Description: Build OpenWrt using GitHub Actions
 #
 
