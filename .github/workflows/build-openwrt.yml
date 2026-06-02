@@ -88,6 +88,13 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
+    - name: Fix mihomo feed circular dependency
+      run: |
+        cd openwrt
+        # mihomo-alpha 与 mihomo-meta 存在循环依赖，会导致 make defconfig 报错
+        # 只保留 stable mihomo 和 luci-app-mihomo，删除有问题的变体包
+        rm -rf feeds/mihomo/mihomo-alpha feeds/mihomo/mihomo-meta
+
     - name: Load configuration
       run: |
         [ -e files ] && mv files openwrt/files
