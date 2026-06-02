@@ -17,7 +17,6 @@ env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
   CONFIG_FILE: .config
-  DIY_SH: diy.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
@@ -89,13 +88,10 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: Load configuration and run DIY script
+    - name: Load configuration
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_SH
 
     - name: SSH connection (debug, triggered by 'ssh' label)
       uses: mxschmitt/action-tmate@v3
