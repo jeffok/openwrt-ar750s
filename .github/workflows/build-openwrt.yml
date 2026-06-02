@@ -107,11 +107,12 @@ jobs:
 
     - name: Download package
       id: package
-      timeout-minutes: 20
+      timeout-minutes: 45
       run: |
         cd openwrt
         make defconfig
-        make download -j8
+        # 并行下载，失败后单线程重试（逐包重试可绕过单个慢源挂死）
+        make download -j8 || make download -j1
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
