@@ -76,6 +76,20 @@ jobs:
         git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    - name: Cache downloaded packages
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/dl
+        key: openwrt-dl-${{ hashFiles('.config') }}
+        restore-keys: openwrt-dl-
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: openwrt-ccache-ath79-${{ github.run_id }}
+        restore-keys: openwrt-ccache-ath79-
+
     - name: Inject custom feeds
       run: |
         cd openwrt
