@@ -14,6 +14,7 @@
 | 内存 | 128MB RAM |
 | 存储 | 16MB NOR + 128MB NAND |
 | WiFi | 2.4GHz (ath9k) + 5GHz (ath10k) 双频 |
+| 内核 | Linux 6.6（含以太网驱动补丁） |
 | 源码 | coolsnowwolf/lede master |
 
 ## 内置功能
@@ -27,12 +28,13 @@
 | 透明代理 | kmod-nft-tproxy + kmod-tcp-bbr |
 | USB LTE | 华为 E372（NCM 模式）+ usb-modeswitch |
 | SD 卡扩展 | kmod-fs-ext4 + e2fsprogs + fdisk（extroot） |
-| 命令行工具 | curl、wget-ssl、tcpdump、ip-full、htop |
+| 基础工具 | curl、wget-ssl、tcpdump、ip-full、htop |
+| 网络诊断 | mtr、bind-dig、bind-nslookup、iperf3、ethtool、netcat |
 
 ## 默认配置
 
 - 管理地址：`http://192.168.1.1`
-- 初始密码：无（首次登录后设置）
+- 初始密码：**`password`**（首次登录后建议修改）
 
 ## 触发构建
 
@@ -73,6 +75,35 @@ sysupgrade -n /tmp/openwrt-ath79-nand-glinet_gl-ar750s-nor-nand-squashfs-sysupgr
 |------|------|
 | `*-squashfs-sysupgrade.bin` | **主要刷机文件**，U-Boot 和 sysupgrade 均可使用 |
 | `*-initramfs-kernel.bin` | 临时内核，仅在内存运行，用于救援调试 |
+
+## 内核补丁说明
+
+本固件在 Lean LEDE 源码基础上增加了以下关键修复：
+
+**以太网驱动修复（kernel 6.6）**
+
+kernel 6.6 中，`ag71xx_legacy` 以太网驱动与 `syscon` 框架存在 reset control 冲突（`-EBUSY`），导致 MDIO probe 失败、有线网口全部消失。修复方式：在编译时向 `ath79.dtsi` 注入 `syscon-no-reset` 属性，绕过冲突（对应 LEDE 补丁 `820-mfd-syscon-support-skip-reset-control-for-syscon-devices`）。
+
+## 常用诊断命令
+
+```bash
+# 网络路径诊断（mtr 替代 ping + traceroute）
+mtr 8.8.8.8
+
+# DNS 查询
+dig google.com @8.8.8.8
+nslookup google.com
+
+# 带宽测试（需两端都有 iperf3）
+iperf3 -s          # 服务端
+iperf3 -c <IP>     # 客户端
+
+# 以太网链路状态
+ethtool eth0
+
+# 端口连通性测试
+nc -zv 8.8.8.8 53
+```
 
 ## 致谢
 
