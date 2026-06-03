@@ -29,22 +29,16 @@
 | USB LTE | 华为 E372（NCM 模式）+ usb-modeswitch |
 | SD 卡扩展 | kmod-fs-ext4 + e2fsprogs + fdisk（extroot） |
 | 基础工具 | curl、wget-ssl、tcpdump、ip-full、htop |
-| 网络诊断 | mtr、bind-dig、bind-nslookup、iperf3、ethtool、netcat |
+| 网络诊断 | mtr、ping、netstat（net-tools）、bind-dig、bind-nslookup、iperf3、ethtool、netcat |
 
 ## 默认配置
 
 - 管理地址：`http://192.168.1.1`
 - 初始密码：**`password`**（首次登录后建议修改）
 
-## 触发构建
+## 获取固件
 
-以下情况会自动/手动触发 GitHub Actions 构建：
-
-- 手动：Actions 页面点击 **Run workflow**
-- 自动：push 修改 `.config` 文件时
-- 自动：发布 Release 时
-
-构建完成后在 Actions 页面 **Artifacts** 中下载固件（保留 90 天）。
+push 修改 `.config` 后 GitHub Actions 自动构建，完成后在 Actions 页面 **Artifacts** 中下载（保留 90 天）。
 
 ## 刷机方法
 
@@ -87,18 +81,25 @@ kernel 6.6 中，`ag71xx_legacy` 以太网驱动与 `syscon` 框架存在 reset 
 ## 常用诊断命令
 
 ```bash
-# 网络路径诊断（mtr 替代 ping + traceroute）
+# 连通性测试
+ping 8.8.8.8
+
+# 路径追踪（显示每跳延迟和丢包，实时刷新）
 mtr 8.8.8.8
+
+# 查看当前连接和端口占用
+netstat -tulnp          # 监听端口
+netstat -an             # 所有连接
 
 # DNS 查询
 dig google.com @8.8.8.8
 nslookup google.com
 
 # 带宽测试（需两端都有 iperf3）
-iperf3 -s          # 服务端
-iperf3 -c <IP>     # 客户端
+iperf3 -s               # 路由器作服务端
+iperf3 -c 192.168.1.1   # 客户端连路由器测速
 
-# 以太网链路状态
+# 以太网链路状态（速率、双工、驱动）
 ethtool eth0
 
 # 端口连通性测试
