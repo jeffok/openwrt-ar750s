@@ -9,6 +9,8 @@ on:
       - main
     paths:
       - '.config'
+      - '.github/workflows/build-openwrt.yml'
+      - 'files/**'
   # 发布 Release 时触发
   release:
     types: published
@@ -129,6 +131,27 @@ jobs:
         print(f'Patched ath79.dtsi: added syscon-no-reset to {changed} eth node(s)')
         "
 
+    - name: Fix GL-AR750S nor-nand sysupgrade metadata
+      run: |
+        cd openwrt
+        # LEDE 上游 bug：nor-nand 镜像的 SUPPORTED_DEVICES 只有 glinet,gl-ar750s-nor，
+        # 缺少 glinet,gl-ar750s-nor-nand，导致 sysupgrade 校验失败、无法写入永久系统
+        python3 -c "
+        import re
+        path = 'target/linux/ath79/image/nand.mk'
+        content = open(path).read()
+        old = '''  SUPPORTED_DEVICES += glinet,gl-ar750s-nor
+endef
+TARGET_DEVICES += glinet_gl-ar750s-nor-nand'''
+        new = '''  SUPPORTED_DEVICES += gl-ar750s glinet,gl-ar750s glinet,gl-ar750s-nor glinet,gl-ar750s-nor-nand
+endef
+TARGET_DEVICES += glinet_gl-ar750s-nor-nand'''
+        if old not in content:
+            raise SystemExit('nand.mk patch anchor not found')
+        open(path, 'w').write(content.replace(old, new, 1))
+        print('Patched nand.mk: nor-nand image now supports glinet,gl-ar750s-nor-nand')
+        "
+
     - name: Load configuration
       run: |
         [ -e files ] && mv files openwrt/files
@@ -161,6 +184,21 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Verify sysupgrade image metadata
+      run: |
+        cd openwrt/bin/targets/ath79/nand
+        IMG=$(ls *glinet_gl-ar750s-nor-nand*squashfs-sysupgrade.bin 2>/dev/null | head -1)
+        if [ -z "$IMG" ]; then
+          echo "ERROR: nor-nand sysupgrade.bin not found"
+          exit 1
+        fi
+        ls -lh "$IMG"
+        strings "$IMG" | grep -q 'glinet,gl-ar750s-nor-nand' || {
+          echo "ERROR: metadata missing glinet,gl-ar750s-nor-nand"
+          exit 1
+        }
+        echo "OK: sysupgrade metadata includes glinet,gl-ar750s-nor-nand"
 
     - name: Check space usage
       if: (!cancelled())

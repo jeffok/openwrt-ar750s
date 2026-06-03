@@ -40,26 +40,44 @@
 
 push 修改 `.config` 后 GitHub Actions 自动构建，完成后在 Actions 页面 **Artifacts** 中下载（保留 90 天）。
 
-## 刷机方法
+## 刷机方法（GL-AR750S NOR+NAND 必看）
 
-### 从 U-Boot 救援模式全新刷入（推荐）
+本机型为 **NOR 内核 + NAND 根文件系统**。`squashfs-sysupgrade.bin` 是 **tar 包**，只能由系统里的 `sysupgrade` 解包写入，**不能**在 U-Boot 里当普通 bin 直刷（会写坏 Flash，重启后一直停在 initramfs）。
 
-适用于：忘记密码、系统损坏、版本过旧无法 sysupgrade。
+### 标准两步刷机（推荐）
 
-1. 电脑用网线连接路由器任意 **LAN 口**
-2. 路由器断电，**按住 Reset 键**，插电，约 5 秒后 LED 快速闪烁时松手
-3. 浏览器访问 `http://192.168.1.1`，出现 U-Boot Firmware Update 页面
-4. 上传 `*-squashfs-sysupgrade.bin`，点击 **Update gl-inet firmware**
-5. 等待 3~5 分钟，**不要断电**，LED 稳定后访问 `http://192.168.1.1`
+**第一步：U-Boot 只刷 initramfs（进临时系统）**
 
-### 从运行中的 OpenWrt 升级
+1. 网线连接 LAN 口，电脑设 `192.168.1.2`
+2. 断电，按住 **Reset** 上电，LED 快闪后松手
+3. 浏览器打开 `http://192.168.1.1`，上传 **`*-initramfs-kernel.bin`**
+4. 启动后用 `http://192.168.1.1` 登录，密码 **`password`**
+
+**第二步：在 initramfs 里 sysupgrade 永久固件**
 
 ```bash
-# 上传固件到路由器
-scp openwrt-ath79-nand-glinet_gl-ar750s-nor-nand-squashfs-sysupgrade.bin root@192.168.1.1:/tmp/
+wifi down
+rm -f /tmp/sysupgrade.bin
 
-# SSH 进入后执行升级（-n 清空配置全新安装）
-ssh root@192.168.1.1
+# Mac 固件目录开 HTTP（把 IP 换成你电脑的）
+# python3 -m http.server 8080
+
+# 路由器拉取（示例 IP 192.168.1.100）
+wget -O /tmp/sysupgrade.bin http://192.168.1.100:8080/openwrt-ath79-nand-glinet_gl-ar750s-nor-nand-squashfs-sysupgrade.bin
+ls -lh /tmp/sysupgrade.bin    # 须约 14MB
+
+# 先测试镜像是否匹配本机
+sysupgrade -T /tmp/sysupgrade.bin
+
+# 正式刷入（会重启）
+sysupgrade -n /tmp/sysupgrade.bin
+```
+
+刷机成功后 **不应再出现** LuCI 黄条「initramfs 恢复模式」。若仍有，说明镜像过旧或 `sysupgrade` 未成功，需用**含 metadata 修复**的新固件重刷。
+
+### 已在永久系统内升级
+
+```bash
 sysupgrade -n /tmp/openwrt-ath79-nand-glinet_gl-ar750s-nor-nand-squashfs-sysupgrade.bin
 ```
 
@@ -67,8 +85,8 @@ sysupgrade -n /tmp/openwrt-ath79-nand-glinet_gl-ar750s-nor-nand-squashfs-sysupgr
 
 | 文件 | 用途 |
 |------|------|
-| `*-squashfs-sysupgrade.bin` | **主要刷机文件**，U-Boot 和 sysupgrade 均可使用 |
-| `*-initramfs-kernel.bin` | 临时内核，仅在内存运行，用于救援调试 |
+| `*-initramfs-kernel.bin` | **U-Boot 第一步**：临时启动，用于执行 sysupgrade |
+| `*-squashfs-sysupgrade.bin` | **第二步 sysupgrade**：写入 NOR 内核 + NAND 系统，勿在 U-Boot 直刷 |
 
 ## 内核补丁说明
 
@@ -76,7 +94,11 @@ sysupgrade -n /tmp/openwrt-ath79-nand-glinet_gl-ar750s-nor-nand-squashfs-sysupgr
 
 **以太网驱动修复（kernel 6.6）**
 
-kernel 6.6 中，`ag71xx_legacy` 以太网驱动与 `syscon` 框架存在 reset control 冲突（`-EBUSY`），导致 MDIO probe 失败、有线网口全部消失。修复方式：在编译时向 `ath79.dtsi` 注入 `syscon-no-reset` 属性，绕过冲突（对应 LEDE 补丁 `820-mfd-syscon-support-skip-reset-control-for-syscon-devices`）。
+kernel 6.6 中，`ag71xx_legacy` 与 `syscon` 争用 reset → MDIO `-EBUSY` → 无有线。编译时向 `ath79.dtsi` 注入 `syscon-no-reset`（LEDE 补丁 820）。
+
+**sysupgrade 元数据修复（nor-nand）**
+
+LEDE 上游 `nand.mk` 中 nor-nand 镜像的 `SUPPORTED_DEVICES` 漏写 `glinet,gl-ar750s-nor-nand`，会导致 `sysupgrade` 校验失败、刷完仍停在 initramfs。构建时已自动补丁并 CI 校验 metadata。
 
 ## 常用诊断命令
 
