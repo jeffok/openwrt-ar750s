@@ -107,9 +107,9 @@ jobs:
     - name: Fix mihomo feed circular dependency
       run: |
         cd openwrt
-        # mihomo-alpha 与 mihomo-meta 存在循环依赖，会导致 make defconfig 报错
-        # 只保留 stable mihomo 和 luci-app-mihomo，删除有问题的变体包
-        rm -rf feeds/mihomo/mihomo-alpha feeds/mihomo/mihomo-meta
+        # mihomo-alpha 与 mihomo-meta 在 Kconfig 中互相依赖，会导致 make defconfig 报错
+        # 只删除 alpha，保留 mihomo-meta（PROVIDES mihomo，供 nikki 依赖）
+        rm -rf feeds/mihomo/mihomo-alpha
 
     - name: Fix ath79 eth0 syscon-no-reset (kernel 6.6 MDIO probe)
       run: |

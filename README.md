@@ -21,15 +21,15 @@
 
 | 分类 | 包 |
 |------|----|
-| 代理核心 | mihomo + luci-app-mihomo |
+| 代理核心 | Nikki + mihomo-meta（Clash 订阅、Mihomo 智能 DNS） |
 | Web 界面 | LuCI（中文）+ ttyd 终端 |
-| DNS | dnsmasq-full（支持 nftset/DHCP） |
+| DNS | Mihomo 分流 DNS + dnsmasq-full（DHCP/nftset） |
 | WiFi 认证 | wpad-openssl（支持 WPA3） |
 | 透明代理 | kmod-nft-tproxy + kmod-tcp-bbr |
 | USB LTE | 华为 E372（NCM 模式）+ usb-modeswitch |
-| SD 卡扩展 | kmod-fs-ext4 + e2fsprogs + fdisk（extroot） |
+| SD 卡 | kmod-phy-ath79-usb + USB 存储 + ext4/vfat（内置 USB 读卡器） |
 | 基础工具 | curl、wget-ssl、tcpdump、ip-full、htop |
-| 网络诊断 | mtr、ping、netstat（net-tools）、bind-dig、bind-nslookup、iperf3、ethtool、netcat |
+| 网络诊断 | mtr、netstat（net-tools）；dig/iperf3 等可按需 opkg 安装 |
 
 ## 默认配置
 
@@ -100,6 +100,27 @@ kernel 6.6 中，`ag71xx_legacy` 与 `syscon` 争用 reset → MDIO `-EBUSY` →
 
 LEDE 上游 `nand.mk` 中 nor-nand 镜像的 `SUPPORTED_DEVICES` 漏写 `glinet,gl-ar750s-nor-nand`，会导致 `sysupgrade` 校验失败、刷完仍停在 initramfs。构建时已自动补丁并 CI 校验 metadata。
 
+## 代理（Nikki）使用说明
+
+1. LuCI → **服务 → Nikki**，启用插件并填入 Clash 订阅 URL（或上传 YAML 配置）。
+2. 订阅内若含 `type: wireguard` 节点，由 Mihomo 核心直接支持；纯 `.conf` 格式 WG 订阅需自行转换或另配 `wireguard`。
+3. 在 Nikki 中开启 **DNS 劫持** 与 **局域网/本机代理**；LuCI **网络 → DHCP/DNS** 中关闭「DNS 重定向」，避免与 Mihomo DNS 冲突。
+4. 固件已禁用 KMS（`vlmcsd`）；系统自带 `firewall4` 保留（NAT 必需），无需额外安装 OpenClash。
+
+## SD 卡（microSD）说明
+
+AR750S 卡槽为 **内置 USB 读卡器**（非 `mmcblk`），设备名为 `/dev/sda`。固件已包含 `kmod-phy-ath79-usb`（USB PHY，缺此模块则整机 USB 不工作）。
+
+刷机后验证：
+
+```bash
+lsusb                          # 应看到 05e3:0723 等 USB 设备
+block info                     # 应有 /dev/sda1
+lsmod | grep phy-ar7200        # PHY 模块应已加载
+```
+
+若卡为 FAT32，已含 `kmod-fs-vfat`；ext4 卡用 `mkfs.ext4 /dev/sda1` 后于 **挂载点** 或 extroot 配置挂载。
+
 ## 常用诊断命令
 
 ```bash
@@ -113,23 +134,13 @@ mtr 8.8.8.8
 netstat -tulnp          # 监听端口
 netstat -an             # 所有连接
 
-# DNS 查询
-dig google.com @8.8.8.8
+# DNS 查询（未预装 dig 时可用 nslookup，或 opkg install bind-dig）
 nslookup google.com
-
-# 带宽测试（需两端都有 iperf3）
-iperf3 -s               # 路由器作服务端
-iperf3 -c 192.168.1.1   # 客户端连路由器测速
-
-# 以太网链路状态（速率、双工、驱动）
-ethtool eth0
-
-# 端口连通性测试
-nc -zv 8.8.8.8 53
 ```
 
 ## 致谢
 
 - [coolsnowwolf/lede](https://github.com/coolsnowwolf/lede) — 源码
 - [P3TERX/Actions-OpenWrt](https://github.com/P3TERX/Actions-OpenWrt) — workflow 参考
-- [morytyann/OpenWrt-mihomo](https://github.com/morytyann/OpenWrt-mihomo) — mihomo feed
+- [morytyann/OpenWrt-mihomo](https://github.com/morytyann/OpenWrt-mihomo) — Nikki / mihomo-meta feed
+- [nikkinikki-org/OpenWrt-nikki](https://github.com/nikkinikki-org/OpenWrt-nikki) — Nikki 文档与 Wiki
