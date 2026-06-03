@@ -109,6 +109,26 @@ jobs:
         # 只保留 stable mihomo 和 luci-app-mihomo，删除有问题的变体包
         rm -rf feeds/mihomo/mihomo-alpha feeds/mihomo/mihomo-meta
 
+    - name: Fix ath79 eth0 syscon-no-reset (kernel 6.6 MDIO probe)
+      run: |
+        cd openwrt
+        # 根本原因：kernel 6.6 的 syscon 驱动在注册 eth0 regmap 时
+        # 会尝试获取 eth0 的 exclusive reset control（rst 9），
+        # 但该 reset 已被 ag71xx_legacy 驱动持有 → -EBUSY → MDIO probe 失败 → 无以太网
+        #
+        # 修复：在 ath79.dtsi 的 eth 节点加上 syscon-no-reset 属性，
+        # 跳过 syscon 的 reset 获取（补丁 820 已支持此属性）
+        python3 -c "
+        content = open('target/linux/ath79/dts/ath79.dtsi').read()
+        fixed = content.replace(
+            'compatible = \"qca,ath79-eth\", \"syscon\";',
+            'compatible = \"qca,ath79-eth\", \"syscon\";\n\t\t\tsyscon-no-reset;'
+        )
+        open('target/linux/ath79/dts/ath79.dtsi', 'w').write(fixed)
+        changed = fixed.count('syscon-no-reset')
+        print(f'Patched ath79.dtsi: added syscon-no-reset to {changed} eth node(s)')
+        "
+
     - name: Load configuration
       run: |
         [ -e files ] && mv files openwrt/files
