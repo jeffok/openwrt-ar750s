@@ -136,21 +136,25 @@ jobs:
         cd openwrt
         # LEDE 上游 bug：nor-nand 镜像的 SUPPORTED_DEVICES 只有 glinet,gl-ar750s-nor，
         # 缺少 glinet,gl-ar750s-nor-nand，导致 sysupgrade 校验失败、无法写入永久系统
-        python3 -c "
-        import re
-        path = 'target/linux/ath79/image/nand.mk'
+        python3 <<'PYEOF'
+        path = "target/linux/ath79/image/nand.mk"
         content = open(path).read()
-        old = '''  SUPPORTED_DEVICES += glinet,gl-ar750s-nor
-endef
-TARGET_DEVICES += glinet_gl-ar750s-nor-nand'''
-        new = '''  SUPPORTED_DEVICES += gl-ar750s glinet,gl-ar750s glinet,gl-ar750s-nor glinet,gl-ar750s-nor-nand
-endef
-TARGET_DEVICES += glinet_gl-ar750s-nor-nand'''
+        old = (
+            "  SUPPORTED_DEVICES += glinet,gl-ar750s-nor\n"
+            "endef\n"
+            "TARGET_DEVICES += glinet_gl-ar750s-nor-nand"
+        )
+        new = (
+            "  SUPPORTED_DEVICES += gl-ar750s glinet,gl-ar750s "
+            "glinet,gl-ar750s-nor glinet,gl-ar750s-nor-nand\n"
+            "endef\n"
+            "TARGET_DEVICES += glinet_gl-ar750s-nor-nand"
+        )
         if old not in content:
-            raise SystemExit('nand.mk patch anchor not found')
-        open(path, 'w').write(content.replace(old, new, 1))
-        print('Patched nand.mk: nor-nand image now supports glinet,gl-ar750s-nor-nand')
-        "
+            raise SystemExit("nand.mk patch anchor not found")
+        open(path, "w").write(content.replace(old, new, 1))
+        print("Patched nand.mk: nor-nand image now supports glinet,gl-ar750s-nor-nand")
+        PYEOF
 
     - name: Load configuration
       run: |
