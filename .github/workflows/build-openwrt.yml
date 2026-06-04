@@ -10,6 +10,7 @@ on:
     paths:
       - '.config'
       - '.github/workflows/build-openwrt.yml'
+      - '.github/scripts/**'
       - 'files/**'
   # 发布 Release 时触发
   release:
@@ -152,75 +153,7 @@ jobs:
       run: |
         cd openwrt
         # ath79 为 mipsle softfloat；源码编 with_gvisor 会在 LEDE 工具链上因 gvisor/tailscale 失败
-        python3 <<'PYEOF'
-        from pathlib import Path
-
-        def patch_meta():
-            p = Path("feeds/mihomo/mihomo-meta/Makefile")
-            text = p.read_text()
-            old = """define Build/Prepare
-\t$(Build/Prepare/Default)
-\t$(RM) -r $(PKG_BUILD_DIR)/rules/logic_test
-endef
-
-$(eval $(call GoBinPackage,mihomo-meta))
-$(eval $(call BuildPackage,mihomo-meta))
-"""
-            new = """define Build/Prepare
-\t$(Build/Prepare/Default)
-\t$(RM) -r $(PKG_BUILD_DIR)/rules/logic_test
-endef
-
-# ath79：使用 MetaCubeX 官方 mipsle-softfloat 预编译内核
-ifeq ($(CONFIG_TARGET_ath79),y)
-MIHOMO_PREBUILT_ARCH:=mipsle-softfloat
-define Download/mihomo-prebuilt
-\tURL:=https://github.com/MetaCubeX/mihomo/releases/download/$(PKG_BUILD_VERSION)/
-\tFILE:=mihomo-linux-$(MIHOMO_PREBUILT_ARCH)-$(PKG_BUILD_VERSION).gz
-endef
-$(eval $(call Download,mihomo-prebuilt))
-define Build/Compile
-\t$(INSTALL_DIR) $(PKG_BUILD_DIR)/usr/libexec
-\tgzip -dc $(DL_DIR)/mihomo-linux-$(MIHOMO_PREBUILT_ARCH)-$(PKG_BUILD_VERSION).gz \\
-\t\t> $(PKG_BUILD_DIR)/usr/libexec/mihomo
-\tchmod +x $(PKG_BUILD_DIR)/usr/libexec/mihomo
-endef
-define Package/mihomo-meta/install
-\t$(INSTALL_DIR) $(1)/usr/libexec
-\t$(INSTALL_BIN) $(PKG_BUILD_DIR)/usr/libexec/mihomo $(1)/usr/libexec/mihomo
-endef
-$(eval $(call BuildPackage,mihomo-meta))
-else
-$(eval $(call GoBinPackage,mihomo-meta))
-$(eval $(call BuildPackage,mihomo-meta))
-endif
-"""
-            if old not in text:
-                raise SystemExit("mihomo-meta Makefile anchor not found")
-            p.write_text(text.replace(old, new, 1))
-            print("Patched mihomo-meta: ath79 uses prebuilt mipsle-softfloat binary")
-
-        def patch_nikki():
-            p = Path("feeds/mihomo/nikki/Makefile")
-            text = p.read_text()
-            old = """$(eval $(call GoBinPackage,nikki))
-$(eval $(call BuildPackage,nikki))
-"""
-            new = """ifeq ($(CONFIG_TARGET_ath79),y)
-$(eval $(call BuildPackage,nikki))
-else
-$(eval $(call GoBinPackage,nikki))
-$(eval $(call BuildPackage,nikki))
-endif
-"""
-            if old not in text:
-                raise SystemExit("nikki Makefile anchor not found")
-            p.write_text(text.replace(old, new, 1))
-            print("Patched nikki: ath79 skips Go source build (uses mihomo-meta binary)")
-
-        patch_meta()
-        patch_nikki()
-        PYEOF
+        python3 "$GITHUB_WORKSPACE/.github/scripts/patch-mihomo-ath79.py" .
 
     - name: Fix ath79 eth0 syscon-no-reset (kernel 6.6 MDIO probe)
       run: |
