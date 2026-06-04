@@ -35,6 +35,29 @@
 
 - 管理地址：`http://192.168.1.1`
 - 初始密码：**`password`**（首次登录后建议修改）
+- LuCI 主题：**Argon**（系统 → 主题 里可改回 bootstrap/material）
+
+## 刷机后不能上网（离线排查）
+
+无法 `opkg` 时，在路由器 SSH 执行（不依赖外网）：
+
+```bash
+# 看 WAN 是否拿到 IP
+ip -4 addr show dev eth0.2
+ubus call network.interface.wan status
+
+# 常见：sysupgrade -n 后 WAN 未配，改 DHCP 并重启网络
+uci set network.wan.proto='dhcp'
+uci set network.wan.device='eth0.2'
+uci commit network
+/etc/init.d/network restart
+
+# 测连通（先 IP 再域名）
+ping -c 3 223.5.5.5
+ping -c 3 baidu.com
+```
+
+PC 需接 **LAN 口**，管理页 `http://192.168.1.1`。若 Nikki 曾误开透明代理，先在 LuCI 关掉 Nikki 或执行 `/etc/init.d/nikki stop`。
 
 ## 获取固件
 

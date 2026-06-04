@@ -29,6 +29,19 @@ jobs:
     timeout-minutes: 180
 
     steps:
+    - name: Cancel outdated workflow runs
+      run: |
+        # 新提交构建前取消同仓库内仍在运行的旧 run，避免并行占满 runner
+        gh run list --repo "${{ github.repository }}" --json databaseId,status \
+          --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId' \
+        | while read -r id; do
+            [ "$id" = "${{ github.run_id }}" ] && continue
+            echo "Cancelling run $id"
+            gh run cancel "$id" --repo "${{ github.repository }}" || true
+          done
+      env:
+        GH_TOKEN: ${{ github.token }}
+
     - name: Checkout
       uses: actions/checkout@v4
 
@@ -103,6 +116,20 @@ jobs:
 
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Use Argon as sole LuCI theme
+      run: |
+        cd openwrt
+        # luci 元包依赖 luci-light，默认写死 luci-theme-bootstrap；改为 argon 后可不编 bootstrap
+        f=feeds/luci/collections/luci-light/Makefile
+        if ! grep -q 'luci-theme-bootstrap' "$f"; then
+          echo "WARN: luci-light Makefile anchor changed, check manually"
+          grep luci-theme "$f" || true
+        else
+          sed -i 's/+luci-theme-bootstrap/+luci-theme-argon/' "$f"
+          echo "Patched luci-light: bootstrap -> argon"
+          grep luci-theme "$f"
+        fi
 
     - name: Fix mihomo feed circular dependency
       run: |
@@ -192,6 +219,10 @@ jobs:
           sed -i "/^CONFIG_PACKAGE_${1}=/d" .config
           echo "CONFIG_PACKAGE_${1}=y" >> .config
         }
+        disable_pkg() {
+          sed -i "/^CONFIG_PACKAGE_${1}=/d" .config
+          echo "# CONFIG_PACKAGE_${1} is not set" >> .config
+        }
         for sym in \
           mihomo-meta nikki luci-app-nikki luci-i18n-nikki-zh-cn yq \
           kmod-phy-ath79-usb kmod-usb2 kmod-usb-storage kmod-scsi-core \
@@ -199,11 +230,19 @@ jobs:
           luci-theme-argon luci-app-argon-config; do
           force_pkg "$sym"
         done
+        for sym in \
+          luci-theme-bootstrap luci-theme-material luci-theme-design \
+          luci-theme-openwrt luci-theme-openwrt-2020; do
+          disable_pkg "$sym"
+        done
         make defconfig
-        for sym in PACKAGE_nikki PACKAGE_luci-app-nikki PACKAGE_kmod-phy-ath79-usb PACKAGE_mihomo-meta; do
+        for sym in PACKAGE_nikki PACKAGE_luci-app-nikki PACKAGE_kmod-phy-ath79-usb PACKAGE_mihomo-meta PACKAGE_luci-theme-argon; do
           grep -q "CONFIG_${sym}=y" .config || { echo "ERROR: CONFIG_${sym} missing after defconfig"; exit 1; }
         done
-        echo "OK: Nikki and USB PHY packages enabled in .config"
+        for sym in PACKAGE_luci-theme-bootstrap PACKAGE_luci-theme-material; do
+          grep -q "^CONFIG_${sym}=y" .config && { echo "ERROR: ${sym} should be disabled"; exit 1; }
+        done
+        echo "OK: Nikki, USB PHY, and Argon-only theme in .config"
         # 并行下载，失败后单线程重试（逐包重试可绕过单个慢源挂死）
         make download -j8 || make download -j1
         find dl -size -1024c -exec ls -l {} \;
@@ -244,10 +283,16 @@ jobs:
           echo "ERROR: Packages.manifest not found"
           exit 1
         fi
-        for pkg in mihomo-meta nikki luci-app-nikki kmod-phy-ath79-usb kmod-usb2; do
+        for pkg in mihomo-meta nikki luci-app-nikki kmod-phy-ath79-usb kmod-usb2 luci-theme-argon; do
           grep -q "^${pkg} " "$MANIFEST" || { echo "ERROR: package ${pkg} not in firmware manifest"; exit 1; }
         done
-        echo "OK: critical packages present in firmware manifest"
+        for pkg in luci-theme-bootstrap luci-theme-material luci-theme-design; do
+          if grep -q "^${pkg} " "$MANIFEST"; then
+            echo "ERROR: ${pkg} should not be in firmware (Argon-only)"
+            exit 1
+          fi
+        done
+        echo "OK: critical packages in manifest; extra themes excluded"
 
     - name: Check space usage
       if: (!cancelled())
