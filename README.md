@@ -22,7 +22,7 @@
 | 分类 | 包 |
 |------|----|
 | 代理核心 | Nikki + mihomo-meta（Clash 订阅、Mihomo 智能 DNS） |
-| Web 界面 | LuCI（中文）+ ttyd 终端 |
+| Web 界面 | LuCI（中文）+ **Argon 主题** + ttyd 终端 |
 | DNS | Mihomo 分流 DNS + dnsmasq-full（DHCP/nftset） |
 | WiFi 认证 | wpad-openssl（支持 WPA3） |
 | 透明代理 | kmod-nft-tproxy + kmod-tcp-bbr |
@@ -106,6 +106,15 @@ LEDE 上游 `nand.mk` 中 nor-nand 镜像的 `SUPPORTED_DEVICES` 漏写 `glinet,
 2. 订阅内若含 `type: wireguard` 节点，由 Mihomo 核心直接支持；纯 `.conf` 格式 WG 订阅需自行转换或另配 `wireguard`。
 3. 在 Nikki 中开启 **DNS 劫持** 与 **局域网/本机代理**；LuCI **网络 → DHCP/DNS** 中关闭「DNS 重定向」，避免与 Mihomo DNS 冲突。
 4. 固件已禁用 KMS（`vlmcsd`）；系统自带 `firewall4` 保留（NAT 必需），无需额外安装 OpenClash。
+
+**确认 Nikki 已编入固件：**
+
+```bash
+opkg list-installed | grep -iE 'nikki|mihomo'
+ls /etc/init.d/nikki /usr/bin/mihomo 2>/dev/null
+```
+
+LuCI **服务** 菜单中应出现 **Nikki**；若没有，说明刷入了漏编的旧固件，需重新下载最新 Actions 产物。
 
 ## SD 卡（microSD）说明
 

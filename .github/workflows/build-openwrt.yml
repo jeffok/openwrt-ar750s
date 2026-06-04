@@ -187,21 +187,17 @@ jobs:
       run: |
         cd openwrt
         make defconfig
-        # defconfig 可能因依赖未解析而清掉 nikki/PHY，强制写回关键包
+        # defconfig 可能因依赖未解析而清掉 nikki/PHY，强制写回关键包（LEDE 无 scripts/config 可执行文件，用 sed）
+        force_pkg() {
+          sed -i "/^CONFIG_PACKAGE_${1}=/d" .config
+          echo "CONFIG_PACKAGE_${1}=y" >> .config
+        }
         for sym in \
-          PACKAGE_mihomo-meta \
-          PACKAGE_nikki \
-          PACKAGE_luci-app-nikki \
-          PACKAGE_luci-i18n-nikki-zh-cn \
-          PACKAGE_yq \
-          PACKAGE_kmod-phy-ath79-usb \
-          PACKAGE_kmod-usb2 \
-          PACKAGE_kmod-usb-storage \
-          PACKAGE_kmod-scsi-core \
-          PACKAGE_kmod-fs-vfat \
-          PACKAGE_block-mount \
-          PACKAGE_usbutils; do
-          ./scripts/config --enable "$sym"
+          mihomo-meta nikki luci-app-nikki luci-i18n-nikki-zh-cn yq \
+          kmod-phy-ath79-usb kmod-usb2 kmod-usb-storage kmod-scsi-core \
+          kmod-fs-vfat block-mount usbutils \
+          luci-theme-argon luci-app-argon-config; do
+          force_pkg "$sym"
         done
         make defconfig
         for sym in PACKAGE_nikki PACKAGE_luci-app-nikki PACKAGE_kmod-phy-ath79-usb PACKAGE_mihomo-meta; do
