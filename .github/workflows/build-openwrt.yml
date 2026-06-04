@@ -110,6 +110,12 @@ jobs:
         # mihomo-alpha 与 mihomo-meta 在 Kconfig 中互相依赖，会导致 make defconfig 报错
         # 只删除 alpha，保留 mihomo-meta（PROVIDES mihomo，供 nikki 依赖）
         rm -rf feeds/mihomo/mihomo-alpha
+        # 若 packages feed 也有 nikki，会与 mihomo feed 的 nikki 冲突，导致固件漏编
+        if [ -d feeds/packages/net/nikki ]; then
+          rm -rf feeds/packages/net/nikki
+          echo "Removed conflicting feeds/packages/net/nikki"
+        fi
+        ./scripts/feeds install -p mihomo -a
 
     - name: Fix ath79 eth0 syscon-no-reset (kernel 6.6 MDIO probe)
       run: |
@@ -156,6 +162,15 @@ jobs:
         print("Patched nand.mk: nor-nand image now supports glinet,gl-ar750s-nor-nand")
         PYEOF
 
+    - name: Enable ath79 USB PHY in kernel config
+      run: |
+        cd openwrt
+        # 上游 config-6.6 默认未启用 PHY 模块，kmod-phy-ath79-usb 将无法生成 .ko
+        cfg=target/linux/ath79/config-6.6
+        sed -i 's/# CONFIG_PHY_AR7100_USB is not set/CONFIG_PHY_AR7100_USB=m/' "$cfg"
+        sed -i 's/# CONFIG_PHY_AR7200_USB is not set/CONFIG_PHY_AR7200_USB=m/' "$cfg"
+        grep -E 'CONFIG_PHY_AR7.*USB' "$cfg"
+
     - name: Load configuration
       run: |
         [ -e files ] && mv files openwrt/files
@@ -172,6 +187,27 @@ jobs:
       run: |
         cd openwrt
         make defconfig
+        # defconfig 可能因依赖未解析而清掉 nikki/PHY，强制写回关键包
+        for sym in \
+          PACKAGE_mihomo-meta \
+          PACKAGE_nikki \
+          PACKAGE_luci-app-nikki \
+          PACKAGE_luci-i18n-nikki-zh-cn \
+          PACKAGE_yq \
+          PACKAGE_kmod-phy-ath79-usb \
+          PACKAGE_kmod-usb2 \
+          PACKAGE_kmod-usb-storage \
+          PACKAGE_kmod-scsi-core \
+          PACKAGE_kmod-fs-vfat \
+          PACKAGE_block-mount \
+          PACKAGE_usbutils; do
+          ./scripts/config --enable "$sym"
+        done
+        make defconfig
+        for sym in PACKAGE_nikki PACKAGE_luci-app-nikki PACKAGE_kmod-phy-ath79-usb PACKAGE_mihomo-meta; do
+          grep -q "CONFIG_${sym}=y" .config || { echo "ERROR: CONFIG_${sym} missing after defconfig"; exit 1; }
+        done
+        echo "OK: Nikki and USB PHY packages enabled in .config"
         # 并行下载，失败后单线程重试（逐包重试可绕过单个慢源挂死）
         make download -j8 || make download -j1
         find dl -size -1024c -exec ls -l {} \;
@@ -203,6 +239,19 @@ jobs:
           exit 1
         }
         echo "OK: sysupgrade metadata includes glinet,gl-ar750s-nor-nand"
+
+    - name: Verify packages in firmware manifest
+      run: |
+        cd openwrt
+        MANIFEST=bin/targets/ath79/nand/packages/Packages.manifest
+        if [ ! -f "$MANIFEST" ]; then
+          echo "ERROR: Packages.manifest not found"
+          exit 1
+        fi
+        for pkg in mihomo-meta nikki luci-app-nikki kmod-phy-ath79-usb kmod-usb2; do
+          grep -q "^${pkg} " "$MANIFEST" || { echo "ERROR: package ${pkg} not in firmware manifest"; exit 1; }
+        done
+        echo "OK: critical packages present in firmware manifest"
 
     - name: Check space usage
       if: (!cancelled())

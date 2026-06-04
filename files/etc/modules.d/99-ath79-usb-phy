@@ -1,0 +1,3 @@
+# AR750S USB 主机依赖 PHY 模块，需在 EHCI 之前加载
+phy-ar7200-usb
+phy-ar7100-usb

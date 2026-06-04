@@ -121,6 +121,8 @@ lsmod | grep phy-ar7200        # PHY 模块应已加载
 
 若卡为 FAT32，已含 `kmod-fs-vfat`；ext4 卡用 `mkfs.ext4 /dev/sda1` 后于 **挂载点** 或 extroot 配置挂载。
 
+**若 `lsusb` 报 `libusb: -99` 且无 `/dev/sda`**：说明固件未编入 `kmod-phy-ath79-usb`（USB PHY 未加载）。请使用**含 workflow 校验修复**之后的新固件重刷，不要继续用漏包的旧镜像。
+
 ## 常用诊断命令
 
 ```bash
