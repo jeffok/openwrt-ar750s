@@ -35,7 +35,7 @@
 
 - 管理地址：`http://192.168.1.1`
 - 初始密码：**`password`**（首次登录后建议修改）
-- LuCI 主题：**Argon**（系统 → 主题 里可改回 bootstrap/material）
+- LuCI 主题：**仅 Argon**（已去掉 bootstrap/material 等其它主题以省空间）
 
 ## 刷机后不能上网（离线排查）
 

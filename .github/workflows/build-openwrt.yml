@@ -137,12 +137,16 @@ jobs:
         # mihomo-alpha 与 mihomo-meta 在 Kconfig 中互相依赖，会导致 make defconfig 报错
         # 只删除 alpha，保留 mihomo-meta（PROVIDES mihomo，供 nikki 依赖）
         rm -rf feeds/mihomo/mihomo-alpha
-        # 若 packages feed 也有 nikki，会与 mihomo feed 的 nikki 冲突，导致固件漏编
-        if [ -d feeds/packages/net/nikki ]; then
-          rm -rf feeds/packages/net/nikki
-          echo "Removed conflicting feeds/packages/net/nikki"
+        rm -f package/feeds/mihomo/mihomo-alpha
+        # packages feed 的 nikki 与 mihomo feed 同名且 PROVIDES 不同；勿用 feeds uninstall nikki（会删掉所有 feed 下的 nikki）
+        rm -rf feeds/packages/net/nikki package/feeds/packages/net/nikki
+        ./scripts/feeds install -p mihomo -a -f
+        # 确认仅保留 mihomo feed 的 nikki（依赖 +mihomo，由 mihomo-meta 提供）
+        if [ -e package/feeds/packages/net/nikki ]; then
+          echo "ERROR: packages feed nikki symlink still present"
+          exit 1
         fi
-        ./scripts/feeds install -p mihomo -a
+        ls -la package/feeds/mihomo/
 
     - name: Fix ath79 eth0 syscon-no-reset (kernel 6.6 MDIO probe)
       run: |
@@ -235,9 +239,9 @@ jobs:
           luci-theme-openwrt luci-theme-openwrt-2020; do
           disable_pkg "$sym"
         done
-        make defconfig
-        for sym in PACKAGE_nikki PACKAGE_luci-app-nikki PACKAGE_kmod-phy-ath79-usb PACKAGE_mihomo-meta PACKAGE_luci-theme-argon; do
-          grep -q "CONFIG_${sym}=y" .config || { echo "ERROR: CONFIG_${sym} missing after defconfig"; exit 1; }
+        # 勿二次 make defconfig：LEDE 会按 Kconfig 依赖链剔除手工写入的 nikki/mihomo-meta
+        for sym in PACKAGE_mihomo-meta PACKAGE_nikki PACKAGE_luci-app-nikki PACKAGE_kmod-phy-ath79-usb PACKAGE_luci-theme-argon; do
+          grep -q "CONFIG_${sym}=y" .config || { echo "ERROR: CONFIG_${sym} missing in .config"; exit 1; }
         done
         for sym in PACKAGE_luci-theme-bootstrap PACKAGE_luci-theme-material; do
           grep -q "^CONFIG_${sym}=y" .config && { echo "ERROR: ${sym} should be disabled"; exit 1; }
@@ -252,6 +256,10 @@ jobs:
       id: compile
       run: |
         cd openwrt
+        # 编译前再次确认关键包仍在 .config（download 不应改写，双保险）
+        for sym in mihomo-meta nikki luci-app-nikki kmod-phy-ath79-usb luci-theme-argon; do
+          grep -q "CONFIG_PACKAGE_${sym}=y" .config || { echo "ERROR: CONFIG_PACKAGE_${sym} lost before compile"; exit 1; }
+        done
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
         # 使用新语法替代废弃的 ::set-output / ::set-env
@@ -307,7 +315,7 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
