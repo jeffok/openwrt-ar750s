@@ -27,16 +27,60 @@ def read_var(makefile: str, name: str) -> str:
     return m.group(1).strip()
 
 
+def wrap_block_for_non_ath79(text: str, block: str, marker: str) -> str:
+    """ath79 目标下跳过源码下载定义"""
+    guard = f"ifneq ($(CONFIG_TARGET_ath79),y)\n{block}endif\n"
+    if marker in text:
+        return text
+    if block not in text:
+        raise SystemExit(f"wrap anchor not found: {marker}")
+    return text.replace(block, guard, 1)
+
+
+def wrap_golang_dep_for_non_ath79(text: str) -> str:
+    """ath79 预编译包不需要 golang/host"""
+    block = "PKG_BUILD_DEPENDS:=golang/host\n"
+    if "golang-dep-guard" in text:
+        return text
+    return wrap_block_for_non_ath79(text, block, "golang-dep-guard")
+
+
 def patch_meta(openwrt: Path) -> None:
     p = openwrt / "feeds/mihomo/mihomo-meta/Makefile"
     text = p.read_text()
-    ver = read_var(text, "PKG_VERSION")
+    if "Download/mihomo-prebuilt" in text:
+        print("mihomo-meta already patched, skip")
+        return
+
     build_ver = read_var(text, "PKG_BUILD_VERSION")
     arch = "mipsle-softfloat"
     fname = f"mihomo-linux-{arch}-{build_ver}.gz"
     url = f"https://github.com/MetaCubeX/mihomo/releases/download/{build_ver}/{fname}"
     sha = fetch_sha256(url)
     print(f"mihomo-meta {build_ver}: {fname} sha256={sha}")
+
+    src_block = (
+        "PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz\n"
+        "PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)\n"
+        "PKG_SOURCE_PROTO:=git\n"
+        "PKG_SOURCE_URL:=https://github.com/MetaCubeX/mihomo.git\n"
+        "PKG_SOURCE_VERSION:=v1.19.26\n"
+        "PKG_MIRROR_HASH:=aa1dcb55236167fa46e4d2e992afbb463fbb13bdb1cb7b3ea967cdc11d4b3d7a\n"
+        "\n"
+    )
+    # 使用 Makefile 内实际版本号，避免 feed 升级后锚点失效
+    src_block = re.sub(
+        r"PKG_SOURCE_VERSION:=.*\n",
+        f"PKG_SOURCE_VERSION:={read_var(text, 'PKG_SOURCE_VERSION')}\n",
+        src_block,
+    )
+    src_block = re.sub(
+        r"PKG_MIRROR_HASH:=.*\n",
+        f"PKG_MIRROR_HASH:={read_var(text, 'PKG_MIRROR_HASH')}\n",
+        src_block,
+    )
+    text = wrap_block_for_non_ath79(text, src_block, "mihomo-meta-src-guard")
+    text = wrap_golang_dep_for_non_ath79(text)
 
     old = (
         "define Build/Prepare\n"
@@ -48,20 +92,17 @@ def patch_meta(openwrt: Path) -> None:
         "$(eval $(call BuildPackage,mihomo-meta))\n"
     )
     new = (
-        "define Build/Prepare\n"
-        "\t$(Build/Prepare/Default)\n"
-        "\t$(RM) -r $(PKG_BUILD_DIR)/rules/logic_test\n"
-        "endef\n"
-        "\n"
         "# ath79：MetaCubeX 官方 mipsle-softfloat 预编译（避免 gvisor/tailscale 交叉编译失败）\n"
         "ifeq ($(CONFIG_TARGET_ath79),y)\n"
         f"MIHOMO_PREBUILT_ARCH:={arch}\n"
         "define Download/mihomo-prebuilt\n"
-        f"\tURL:=https://github.com/MetaCubeX/mihomo/releases/download/$(PKG_BUILD_VERSION)/\n"
-        f"\tFILE:=mihomo-linux-$(MIHOMO_PREBUILT_ARCH)-$(PKG_BUILD_VERSION).gz\n"
+        "\tURL:=https://github.com/MetaCubeX/mihomo/releases/download/$(PKG_BUILD_VERSION)/\n"
+        "\tFILE:=mihomo-linux-$(MIHOMO_PREBUILT_ARCH)-$(PKG_BUILD_VERSION).gz\n"
         f"\tHASH:={sha}\n"
         "endef\n"
         "$(eval $(call Download,mihomo-prebuilt))\n"
+        "define Build/Prepare\n"
+        "endef\n"
         "define Build/Compile\n"
         "\t$(INSTALL_DIR) $(PKG_BUILD_DIR)/usr/libexec\n"
         "\tgzip -dc $(DL_DIR)/mihomo-linux-$(MIHOMO_PREBUILT_ARCH)-$(PKG_BUILD_VERSION).gz \\\n"
@@ -74,22 +115,28 @@ def patch_meta(openwrt: Path) -> None:
         "endef\n"
         "$(eval $(call BuildPackage,mihomo-meta))\n"
         "else\n"
+        "define Build/Prepare\n"
+        "\t$(Build/Prepare/Default)\n"
+        "\t$(RM) -r $(PKG_BUILD_DIR)/rules/logic_test\n"
+        "endef\n"
         "$(eval $(call GoBinPackage,mihomo-meta))\n"
         "$(eval $(call BuildPackage,mihomo-meta))\n"
         "endif\n"
     )
-    if "MIHOMO_PREBUILT_ARCH:=mipsle-softfloat" in text and "Download/mihomo-prebuilt" in text:
-        print("mihomo-meta already patched, skip")
-        return
     if old not in text:
-        raise SystemExit("mihomo-meta Makefile anchor not found")
+        raise SystemExit("mihomo-meta Makefile tail anchor not found")
     p.write_text(text.replace(old, new, 1))
-    print("Patched mihomo-meta: ath79 prebuilt with HASH")
+    print("Patched mihomo-meta: ath79 prebuilt with HASH, no source download")
 
 
 def patch_nikki(openwrt: Path) -> None:
     p = openwrt / "feeds/mihomo/nikki/Makefile"
     text = p.read_text()
+    if "ifeq ($(CONFIG_TARGET_ath79),y)\n$(eval $(call BuildPackage,nikki))" in text.replace(
+        "\r\n", "\n"
+    ):
+        print("nikki already patched, skip")
+        return
     old = (
         "$(eval $(call GoBinPackage,nikki))\n"
         "$(eval $(call BuildPackage,nikki))\n"
@@ -102,9 +149,6 @@ def patch_nikki(openwrt: Path) -> None:
         "$(eval $(call BuildPackage,nikki))\n"
         "endif\n"
     )
-    if "ifeq ($(CONFIG_TARGET_ath79),y)\n$(eval $(call BuildPackage,nikki))" in text.replace("\r\n", "\n"):
-        print("nikki already patched, skip")
-        return
     if old not in text:
         raise SystemExit("nikki Makefile anchor not found")
     p.write_text(text.replace(old, new, 1))
@@ -116,11 +160,24 @@ def patch_yq(openwrt: Path) -> None:
     if not p.exists():
         raise SystemExit(f"yq Makefile not found: {p}")
     text = p.read_text()
+    if "Download/yq-prebuilt" in text:
+        print("yq already patched, skip")
+        return
+
     ver = read_var(text, "PKG_VERSION")
     fname = "yq_linux_mipsle"
     url = f"https://github.com/mikefarah/yq/releases/download/v{ver}/{fname}"
     sha = fetch_sha256(url)
     print(f"yq v{ver}: {fname} sha256={sha}")
+
+    src_block = (
+        "PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz\n"
+        "PKG_SOURCE_URL:=https://codeload.github.com/mikefarah/yq/tar.gz/v$(PKG_VERSION)?\n"
+        f"PKG_HASH:={read_var(text, 'PKG_HASH')}\n"
+        "\n"
+    )
+    text = wrap_block_for_non_ath79(text, src_block, "yq-src-guard")
+    text = wrap_golang_dep_for_non_ath79(text)
 
     old = (
         "$(eval $(call GoBinPackage,yq))\n"
@@ -130,7 +187,7 @@ def patch_yq(openwrt: Path) -> None:
         "# ath79：官方 mipsle 预编译，避免 yq Go 交叉编译失败\n"
         "ifeq ($(CONFIG_TARGET_ath79),y)\n"
         "define Download/yq-prebuilt\n"
-        f"\tURL:=https://github.com/mikefarah/yq/releases/download/v$(PKG_VERSION)/\n"
+        "\tURL:=https://github.com/mikefarah/yq/releases/download/v$(PKG_VERSION)/\n"
         f"\tFILE:={fname}\n"
         f"\tHASH:={sha}\n"
         "endef\n"
@@ -150,13 +207,10 @@ def patch_yq(openwrt: Path) -> None:
         "$(eval $(call BuildPackage,yq))\n"
         "endif\n"
     )
-    if "Download/yq-prebuilt" in text:
-        print("yq already patched, skip")
-        return
     if old not in text:
         raise SystemExit("yq Makefile anchor not found")
     p.write_text(text.replace(old, new, 1))
-    print("Patched yq: ath79 prebuilt with HASH")
+    print("Patched yq: ath79 prebuilt with HASH, no source download")
 
 
 def prefetch_dl(openwrt: Path) -> None:

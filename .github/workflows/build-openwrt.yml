@@ -259,14 +259,12 @@ jobs:
         ls -lh dl/mihomo-linux-mipsle-softfloat-*.gz dl/yq_linux_mipsle
         # 并行下载，失败后单线程重试（逐包重试可绕过单个慢源挂死）
         make download -j8 || make download -j1
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
-        # 仅验证预编译包 download 目标（勿单独 compile，工具链未就绪会误报失败）
-        make package/feeds/mihomo/mihomo-meta/download package/feeds/packages/utils/yq/download -j1
+        # 只清理 dl 根目录下的空文件，勿递归删除 go-mod-cache 内小文件
+        find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} \;
         for f in dl/mihomo-linux-mipsle-softfloat-*.gz dl/yq_linux_mipsle; do
           test -s "$f" || { echo "ERROR: prebuilt missing: $f"; exit 1; }
         done
-        echo "OK: mihomo-meta and yq prebuilt verified in dl/"
+        echo "OK: ath79 prebuilt binaries present in dl/"
 
     - name: Compile the firmware
       id: compile
