@@ -261,18 +261,12 @@ jobs:
         make download -j8 || make download -j1
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-
-    - name: Compile critical packages first
-      run: |
-        cd openwrt
-        # 先单独编译易失败包，避免 make -j 并行时错误被淹没
-        for pkg in \
-          package/feeds/mihomo/mihomo-meta \
-          package/feeds/packages/utils/yq \
-          package/feeds/mihomo/nikki; do
-          echo "=== compile $pkg ==="
-          make "$pkg/compile" -j1 V=s
+        # 仅验证预编译包 download 目标（勿单独 compile，工具链未就绪会误报失败）
+        make package/feeds/mihomo/mihomo-meta/download package/feeds/packages/utils/yq/download -j1
+        for f in dl/mihomo-linux-mipsle-softfloat-*.gz dl/yq_linux_mipsle; do
+          test -s "$f" || { echo "ERROR: prebuilt missing: $f"; exit 1; }
         done
+        echo "OK: mihomo-meta and yq prebuilt verified in dl/"
 
     - name: Compile the firmware
       id: compile

@@ -78,6 +78,9 @@ def patch_meta(openwrt: Path) -> None:
         "$(eval $(call BuildPackage,mihomo-meta))\n"
         "endif\n"
     )
+    if "MIHOMO_PREBUILT_ARCH:=mipsle-softfloat" in text and "Download/mihomo-prebuilt" in text:
+        print("mihomo-meta already patched, skip")
+        return
     if old not in text:
         raise SystemExit("mihomo-meta Makefile anchor not found")
     p.write_text(text.replace(old, new, 1))
@@ -99,6 +102,9 @@ def patch_nikki(openwrt: Path) -> None:
         "$(eval $(call BuildPackage,nikki))\n"
         "endif\n"
     )
+    if "ifeq ($(CONFIG_TARGET_ath79),y)\n$(eval $(call BuildPackage,nikki))" in text.replace("\r\n", "\n"):
+        print("nikki already patched, skip")
+        return
     if old not in text:
         raise SystemExit("nikki Makefile anchor not found")
     p.write_text(text.replace(old, new, 1))
@@ -144,6 +150,9 @@ def patch_yq(openwrt: Path) -> None:
         "$(eval $(call BuildPackage,yq))\n"
         "endif\n"
     )
+    if "Download/yq-prebuilt" in text:
+        print("yq already patched, skip")
+        return
     if old not in text:
         raise SystemExit("yq Makefile anchor not found")
     p.write_text(text.replace(old, new, 1))
