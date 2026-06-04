@@ -149,11 +149,11 @@ jobs:
         fi
         ls -la package/feeds/mihomo/
 
-    - name: Fix mihomo mips build (ath79 prebuilt binary)
+    - name: Patch ath79 prebuilt binaries (mihomo-meta + yq)
       run: |
         cd openwrt
-        # ath79 为 mipsle softfloat；源码编 with_gvisor 会在 LEDE 工具链上因 gvisor/tailscale 失败
-        python3 "$GITHUB_WORKSPACE/.github/scripts/patch-mihomo-ath79.py" .
+        # ath79 为 mipsle softfloat：Go 交叉编译 mihomo/yq 会失败，改用官方预编译并写入 HASH
+        python3 "$GITHUB_WORKSPACE/.github/scripts/patch-ath79-prebuilt.py" .
 
     - name: Fix ath79 eth0 syscon-no-reset (kernel 6.6 MDIO probe)
       run: |
@@ -254,17 +254,32 @@ jobs:
           grep -q "^CONFIG_${sym}=y" .config && { echo "ERROR: ${sym} should be disabled"; exit 1; }
         done
         echo "OK: Nikki, USB PHY, and Argon-only theme in .config"
+        # 再次预取 ath79 预编译包（与 patch 脚本 HASH 一致，避免 download.pl 无 HASH 报错）
+        python3 "$GITHUB_WORKSPACE/.github/scripts/patch-ath79-prebuilt.py" . --prefetch-only
+        ls -lh dl/mihomo-linux-mipsle-softfloat-*.gz dl/yq_linux_mipsle
         # 并行下载，失败后单线程重试（逐包重试可绕过单个慢源挂死）
         make download -j8 || make download -j1
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile critical packages first
+      run: |
+        cd openwrt
+        # 先单独编译易失败包，避免 make -j 并行时错误被淹没
+        for pkg in \
+          package/feeds/mihomo/mihomo-meta \
+          package/feeds/packages/utils/yq \
+          package/feeds/mihomo/nikki; do
+          echo "=== compile $pkg ==="
+          make "$pkg/compile" -j1 V=s
+        done
 
     - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
         # 编译前再次确认关键包仍在 .config（download 不应改写，双保险）
-        for sym in mihomo-meta nikki luci-app-nikki kmod-phy-ath79-usb luci-theme-argon; do
+        for sym in mihomo-meta nikki luci-app-nikki kmod-phy-ath79-usb luci-theme-argon yq; do
           grep -q "CONFIG_PACKAGE_${sym}=y" .config || { echo "ERROR: CONFIG_PACKAGE_${sym} lost before compile"; exit 1; }
         done
         echo -e "$(nproc) thread compile"
