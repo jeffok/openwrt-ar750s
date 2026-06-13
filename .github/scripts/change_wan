@@ -1,0 +1,290 @@
+#!/bin/sh
+# change_wan - WAN 切换工具
+#
+# 用法：
+#   change_wan status
+#
+#   # 有线 WAN
+#   change_wan eth                                              DHCP
+#   change_wan eth proto=static ip=x.x.x.x gw=x.x.x.x [mask=x.x.x.x]
+#   change_wan eth proto=static ip=x.x.x.x gw=x.x.x.x eap=peap identity=x pwd=x
+#   change_wan eth eap=peap identity=x pwd=x                   DHCP + EAP-PEAP
+#
+#   # 无线 WAN
+#   change_wan wifi ssid=x pwd=x [band=2g]                     WPA2-PSK，DHCP
+#   change_wan wifi ssid=x eap=peap identity=x pwd=x [band=2g] 802.1X EAP-PEAP，DHCP
+
+CMD="$1"
+shift
+
+# ── 参数解析 ─────────────────────────────────────────────
+SSID="" PWD="" BAND="5g" PROTO="" EAP="" IDENTITY=""
+STATIC_IP="" STATIC_GW="" STATIC_MASK="255.255.255.0"
+for arg in "$@"; do
+    case "$arg" in
+        ssid=*)     SSID="${arg#ssid=}" ;;
+        pwd=*)      PWD="${arg#pwd=}" ;;
+        band=*)     BAND="${arg#band=}" ;;
+        proto=*)    PROTO="${arg#proto=}" ;;
+        ip=*)       STATIC_IP="${arg#ip=}" ;;
+        gw=*)       STATIC_GW="${arg#gw=}" ;;
+        mask=*)     STATIC_MASK="${arg#mask=}" ;;
+        eap=*)      EAP="${arg#eap=}" ;;
+        identity=*) IDENTITY="${arg#identity=}" ;;
+    esac
+done
+
+# ── 辅助函数 ─────────────────────────────────────────────
+log() { echo "$*"; logger -t "change_wan" "$*"; }
+
+# 确保安装了支持 EAP 的 wpad（full 版）
+ensure_eap_support() {
+    if opkg list-installed | grep -q "wpad-basic"; then
+        log "当前 wpad 不支持 EAP，升级到 wpad-mbedtls..."
+        opkg remove wpad-basic-mbedtls wpad-basic-openssl wpad-basic-wolfssl wpad-basic 2>/dev/null
+        opkg install wpad-mbedtls && log "wpad-mbedtls 安装成功" || {
+            log "错误：wpad-mbedtls 安装失败，请检查网络"
+            exit 1
+        }
+    fi
+}
+
+# 配置有线接口 IP（static 或 dhcp）
+apply_wan_ip() {
+    if [ "$PROTO" = "static" ]; then
+        [ -z "$STATIC_IP" ] && { log "错误：proto=static 需要 ip=<地址>"; exit 1; }
+        [ -z "$STATIC_GW" ] && { log "错误：proto=static 需要 gw=<网关>"; exit 1; }
+        uci set network.wan.proto="static"
+        uci set network.wan.ipaddr="$STATIC_IP"
+        uci set network.wan.netmask="$STATIC_MASK"
+        uci set network.wan.gateway="$STATIC_GW"
+        uci set network.wan.dns="127.0.0.1"
+        log "IP 模式: static  $STATIC_IP/$STATIC_MASK  gw=$STATIC_GW"
+    else
+        uci set network.wan.proto="dhcp"
+        uci delete network.wan.ipaddr  2>/dev/null
+        uci delete network.wan.netmask 2>/dev/null
+        uci delete network.wan.gateway 2>/dev/null
+        uci delete network.wan.dns     2>/dev/null
+        log "IP 模式: dhcp"
+    fi
+    # 始终禁止 WAN DHCP 覆盖 resolv.conf
+    uci set network.wan.peerdns="0"
+}
+
+# 有线 EAP-PEAP 认证（通过 wpa_supplicant 对 eth0.2 做 802.1X）
+start_wired_eap() {
+    [ -z "$IDENTITY" ] && { log "错误：eap=peap 需要 identity=<用户名>"; exit 1; }
+    [ -z "$PWD"      ] && { log "错误：eap=peap 需要 pwd=<密码>"; exit 1; }
+
+    ensure_eap_support
+
+    WPA_CONF="/tmp/wpa_wired.conf"
+    cat > "$WPA_CONF" << EOF
+ctrl_interface=/var/run/wpa_supplicant
+network={
+    key_mgmt=IEEE8021X
+    eap=PEAP
+    identity="$IDENTITY"
+    password="$PWD"
+    phase2="auth=MSCHAPV2"
+    eapol_flags=0
+}
+EOF
+    # 停止已有实例
+    kill $(cat /var/run/wpa_supplicant_wired.pid 2>/dev/null) 2>/dev/null
+    wpa_supplicant -D wired -i eth0.2 -c "$WPA_CONF" \
+        -P /var/run/wpa_supplicant_wired.pid -B
+    sleep 3
+    log "有线 EAP-PEAP 认证已启动（identity=$IDENTITY）"
+}
+
+stop_wired_eap() {
+    if [ -f /var/run/wpa_supplicant_wired.pid ]; then
+        kill $(cat /var/run/wpa_supplicant_wired.pid 2>/dev/null) 2>/dev/null
+        rm -f /var/run/wpa_supplicant_wired.pid /tmp/wpa_wired.conf
+        log "有线 EAP-PEAP 已停止"
+    fi
+}
+
+reload_routes() {
+    log "等待接口就绪后重建路由..."
+    sleep 5
+    sh /usr/local/bin/setup-routes.sh
+    log "路由重建完成"
+}
+
+# ── status ───────────────────────────────────────────────
+cmd_status() {
+    echo "=== WAN 状态 ==="
+    WAN_PROTO=$(uci get network.wan.proto 2>/dev/null)
+    WAN_IP=$(ip addr show eth0.2 2>/dev/null | awk '/inet /{print $2}' | head -1)
+    WIRED_EAP=""
+    [ -f /var/run/wpa_supplicant_wired.pid ] && WIRED_EAP="  [EAP-PEAP 运行中]"
+    echo "有线 WAN : proto=${WAN_PROTO}  ip=${WAN_IP:-未获取}${WIRED_EAP}"
+
+    WWAN_SSID=$(uci get wireless.wwan.ssid 2>/dev/null)
+    WWAN_ENC=$(uci get wireless.wwan.encryption 2>/dev/null)
+    WWAN_IP=$(ip addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | head -1)
+    if [ -n "$WWAN_SSID" ]; then
+        echo "无线 WAN : ssid=$WWAN_SSID  enc=${WWAN_ENC:-dhcp}  ip=${WWAN_IP:-未获取}"
+    else
+        echo "无线 WAN : 未配置"
+    fi
+
+    echo ""
+    echo "=== WireGuard 状态 ==="
+    HS=$(wg show wg0 2>/dev/null | awk '/latest handshake/{print $3,$4,$5}')
+    if [ -n "$HS" ]; then
+        echo "WG      : 在线（最后握手: $HS）"
+        OUTIP=$(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null)
+        echo "出口 IP : ${OUTIP:-获取失败}"
+    else
+        echo "WG      : 离线"
+    fi
+
+    echo ""
+    echo "=== 无线接口 ==="
+    for r in radio0 radio1; do
+        DISABLED=$(uci get wireless.$r.disabled 2>/dev/null)
+        BAND_VAL=$(uci get wireless.$r.band 2>/dev/null)
+        echo "  $r ($BAND_VAL): $([ "$DISABLED" = "1" ] && echo disabled || echo enabled)"
+    done
+    for iface in $(uci show wireless | grep "\.mode=" | cut -d. -f2); do
+        MODE=$(uci get wireless.$iface.mode 2>/dev/null)
+        SSID_VAL=$(uci get wireless.$iface.ssid 2>/dev/null)
+        DEV=$(uci get wireless.$iface.device 2>/dev/null)
+        echo "  $iface ($DEV) mode=$MODE ssid=$SSID_VAL"
+    done
+}
+
+# ── eth ──────────────────────────────────────────────────
+cmd_eth() {
+    log "切换到有线 WAN"
+
+    # 清理无线 WAN
+    uci delete wireless.wwan 2>/dev/null
+    uci delete network.wwan  2>/dev/null
+    uci set network.wan.auto="1"
+
+    # 应用 IP 配置
+    apply_wan_ip
+
+    # 恢复被禁用的 AP 接口
+    for iface in $(uci show wireless | grep "disabled='1'" | cut -d. -f2 | cut -d= -f1); do
+        uci delete wireless.$iface.disabled 2>/dev/null
+        log "已恢复 AP: $iface"
+    done
+
+    uci commit wireless
+    uci commit network
+
+    # 停止旧的有线 EAP（如果有）
+    stop_wired_eap
+
+    ifdown wwan 2>/dev/null
+    wifi reload
+    sleep 2
+    ifup wan
+
+    # 启动有线 EAP-PEAP（若指定）
+    [ -n "$EAP" ] && start_wired_eap
+
+    reload_routes
+    log "完成"
+    cmd_status
+}
+
+# ── wifi ─────────────────────────────────────────────────
+cmd_wifi() {
+    [ -z "$SSID" ] && { log "错误：缺少 ssid=<WiFi名称>"; exit 1; }
+
+    # 区分 PSK 和 EAP-PEAP
+    if [ -n "$EAP" ]; then
+        # 802.1X EAP-PEAP：不需要 pwd 作为 WiFi 密码，但需要 identity 和 pwd
+        [ -z "$IDENTITY" ] && { log "错误：eap=peap 需要 identity=<用户名>"; exit 1; }
+        [ -z "$PWD"      ] && { log "错误：eap=peap 需要 pwd=<密码>"; exit 1; }
+        ensure_eap_support
+    else
+        [ -z "$PWD" ] && { log "错误：WPA2-PSK 需要 pwd=<WiFi密码>"; exit 1; }
+    fi
+
+    [ "$BAND" = "2g" ] && RADIO="radio1" || RADIO="radio0"
+    log "切换到无线 WAN: SSID=$SSID  band=$BAND ($RADIO)"
+
+    uci set wireless.wwan=wifi-iface
+    uci set wireless.wwan.device="$RADIO"
+    uci set wireless.wwan.mode="sta"
+    uci set wireless.wwan.ssid="$SSID"
+    uci set wireless.wwan.network="wwan"
+    uci set wireless.wwan.disabled="0"
+
+    if [ -n "$EAP" ]; then
+        # EAP-PEAP 配置
+        uci set wireless.wwan.encryption="wpa2"
+        uci set wireless.wwan.eap_type="peap"
+        uci set wireless.wwan.identity="$IDENTITY"
+        uci set wireless.wwan.password="$PWD"
+        uci set wireless.wwan.auth="MSCHAPV2"
+        log "无线认证: EAP-PEAP（identity=$IDENTITY）"
+    else
+        # WPA2-PSK
+        uci set wireless.wwan.encryption="psk2"
+        uci set wireless.wwan.key="$PWD"
+        log "无线认证: WPA2-PSK"
+    fi
+
+    # 禁用同 radio 上的 AP
+    for iface in $(uci show wireless | grep "device='$RADIO'" | cut -d. -f2); do
+        [ "$iface" = "wwan" ] && continue
+        MODE=$(uci get wireless.$iface.mode 2>/dev/null)
+        [ "$MODE" = "ap" ] && {
+            uci set wireless.$iface.disabled="1"
+            log "已禁用同频 AP: $iface"
+        }
+    done
+
+    # 无线 WAN 固定 DHCP
+    uci set network.wwan=interface
+    uci set network.wwan.proto="dhcp"
+    uci set network.wan.auto="0"
+
+    uci commit wireless
+    uci commit network
+
+    wifi reload
+    sleep 3
+    ifup wwan
+    reload_routes
+
+    log "完成"
+    cmd_status
+}
+
+# ── 入口 ─────────────────────────────────────────────────
+case "$CMD" in
+    status) cmd_status ;;
+    eth)    cmd_eth ;;
+    wifi)   cmd_wifi ;;
+    *)
+        cat << 'EOF'
+用法：
+  change_wan status
+
+  # 有线 WAN
+  change_wan eth                                               DHCP
+  change_wan eth proto=static ip=10.99.57.66 gw=10.99.57.253 [mask=255.255.255.0]
+  change_wan eth eap=peap identity=user@corp.com pwd=Pass      DHCP + EAP-PEAP
+  change_wan eth proto=static ip=x.x.x.x gw=x.x.x.x eap=peap identity=x pwd=x
+
+  # 无线 WAN（固定 DHCP，无需指定 IP）
+  change_wan wifi ssid=MyWiFi pwd=MyPass                       WPA2-PSK，5GHz
+  change_wan wifi ssid=MyWiFi pwd=MyPass band=2g               WPA2-PSK，2.4GHz
+  change_wan wifi ssid=CorpWiFi eap=peap identity=x pwd=x      EAP-PEAP，5GHz
+  change_wan wifi ssid=CorpWiFi eap=peap identity=x pwd=x band=2g
+
+  # 切回有线
+  change_wan eth
+EOF
+        exit 1 ;;
+esac

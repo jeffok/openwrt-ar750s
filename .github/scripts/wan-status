@@ -1,0 +1,36 @@
+#!/bin/sh
+# 查看当前 WAN 状态
+
+echo "=== WAN 状态 ==="
+
+# 当前 WAN 接口
+WAN_IF=$(ip route show default | grep -v wg0 | awk '{print $5}' | head -1)
+WAN_IP=$(ip addr show $WAN_IF 2>/dev/null | awk '/inet /{print $2}' | head -1)
+
+if echo "$WAN_IF" | grep -q "wlan\|wwan"; then
+    SSID=$(iwinfo $WAN_IF info 2>/dev/null | awk '/ESSID/{print $2}' | tr -d '"')
+    echo "模式    : 无线 WAN"
+    echo "接口    : $WAN_IF"
+    echo "SSID    : ${SSID:-未知}"
+    echo "WAN IP  : ${WAN_IP:-未获取}"
+elif [ -n "$WAN_IF" ]; then
+    echo "模式    : 有线 WAN"
+    echo "接口    : $WAN_IF"
+    echo "WAN IP  : ${WAN_IP:-未获取}"
+else
+    echo "模式    : 未知（无默认路由）"
+fi
+
+echo ""
+echo "=== WireGuard 状态 ==="
+WG_STATUS=$(wg show wg0 2>/dev/null | awk '/latest handshake/{print $3,$4,$5}')
+if [ -n "$WG_STATUS" ]; then
+    echo "WG      : 在线（最后握手: $WG_STATUS）"
+    echo "出口 IP : $(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null || echo 未知)"
+else
+    echo "WG      : 离线"
+fi
+
+echo ""
+echo "=== 无线接口 ==="
+iwinfo 2>/dev/null | grep -E "^wlan|ESSID|Mode" | paste - - | awk '{printf "%-8s %-6s %s\n", $1, $3, $5}'

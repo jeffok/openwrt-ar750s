@@ -1,0 +1,33 @@
+#!/bin/sh
+# 切回有线 WAN，恢复两个频段的 AP 模式
+
+echo "切换到有线 WAN..."
+
+# 1. 删除无线 WAN 接口配置
+uci delete wireless.wwan 2>/dev/null
+uci delete network.wwan 2>/dev/null
+
+# 2. 恢复有线 WAN
+uci set network.wan.auto="1"
+
+# 3. 恢复所有被禁用的 AP 接口
+for iface in $(uci show wireless | grep "disabled='1'" | cut -d. -f2); do
+    uci delete wireless.$iface.disabled
+    echo "已恢复 AP: $iface"
+done
+
+uci commit wireless
+uci commit network
+
+# 4. 重启网络
+ifdown wwan 2>/dev/null
+wifi reload
+sleep 2
+ifup wan
+sleep 3
+
+# 5. 更新路由
+sh /usr/local/bin/setup-routes.sh
+
+echo "完成：已切换回有线 WAN"
+wan-status

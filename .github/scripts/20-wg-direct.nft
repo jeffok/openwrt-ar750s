@@ -1,0 +1,23 @@
+# WireGuard 分流持久化规则 - fw4 启动时自动加载
+
+# cn_domains set：SmartDNS 国内域名解析结果动态写入
+set cn_domains {
+    type ipv4_addr
+    flags interval
+    auto-merge
+}
+
+# cn_ip set：国内 IP 段，由 update-rules.sh 定期加载
+set cn_ip {
+    type ipv4_addr
+    flags interval
+    auto-merge
+}
+
+# prerouting：命中 cn_domains 或 cn_ip 的包打 mark 0x1，走策略路由 table 200（直连）
+chain cn_domains_mark {
+    type filter hook prerouting priority mangle - 1
+    meta l4proto { tcp, udp } ip daddr @cn_domains meta mark set 0x00000001
+    # cn_ip：直接访问国内 IP 时（无域名），同样走直连
+    meta l4proto { tcp, udp } ip daddr @cn_ip      meta mark set 0x00000001
+}

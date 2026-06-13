@@ -1,0 +1,77 @@
+#!/bin/sh
+# 用法：wan-wifi ssid=<SSID> pwd=<密码> [band=5g|2g]
+# 把 5GHz（默认）或 2.4GHz 切换为无线 WAN，连接指定 AP
+# 同时保留另一个频段作为 AP 给下游设备
+
+SSID=""
+PWD=""
+BAND="5g"  # 默认用 5GHz 连上游
+
+# 解析参数（支持 key=value 格式）
+for arg in "$@"; do
+    case "$arg" in
+        ssid=*) SSID="${arg#ssid=}" ;;
+        pwd=*)  PWD="${arg#pwd=}" ;;
+        band=*) BAND="${arg#band=}" ;;
+    esac
+done
+
+[ -z "$SSID" ] && { echo "错误：请指定 ssid=<WiFi名称>"; exit 1; }
+[ -z "$PWD"  ] && { echo "错误：请指定 pwd=<WiFi密码>"; exit 1; }
+
+# 根据频段选择 radio
+if [ "$BAND" = "2g" ]; then
+    RADIO="radio1"
+    OTHER_RADIO="radio0"
+else
+    RADIO="radio0"
+    OTHER_RADIO="radio1"
+fi
+
+echo "连接中：SSID=$SSID 频段=$BAND ($RADIO)..."
+
+# 1. 配置 station 接口（连接上游 AP）
+uci set wireless.wwan=wifi-iface
+uci set wireless.wwan.device="$RADIO"
+uci set wireless.wwan.mode="sta"
+uci set wireless.wwan.ssid="$SSID"
+uci set wireless.wwan.encryption="psk2"
+uci set wireless.wwan.key="$PWD"
+uci set wireless.wwan.network="wwan"
+
+# 2. 确保同频段原有 AP 关闭（一个 radio 同时只能一个 STA）
+# 找到该 radio 上的 AP 接口并禁用
+for iface in $(uci show wireless | grep "device='$RADIO'" | grep -v "wwan" | cut -d. -f2); do
+    MODE=$(uci get wireless.$iface.mode 2>/dev/null)
+    [ "$MODE" = "ap" ] && {
+        uci set wireless.$iface.disabled="1"
+        echo "已禁用同频 AP: $iface"
+    }
+done
+
+# 3. 创建 wwan 网络接口（DHCP 获取上游 IP）
+uci set network.wwan=interface
+uci set network.wwan.proto="dhcp"
+
+# 4. 禁用有线 WAN（避免路由冲突）
+uci set network.wan.auto="0"
+
+uci commit wireless
+uci commit network
+
+# 5. 重启无线和网络
+wifi reload
+sleep 3
+ifup wwan
+sleep 5
+
+# 6. 更新路由（探测新的 WAN 接口）
+WAN_IF=$(ip route show default | grep -v wg0 | awk '{print $5}' | grep -v "^$" | head -1)
+if [ -n "$WAN_IF" ]; then
+    echo "WAN 接口: $WAN_IF"
+    sh /usr/local/bin/setup-routes.sh
+    echo "完成：已通过 $SSID 上网，WireGuard 翻墙正常"
+else
+    echo "警告：未获取到 IP，请检查 SSID/密码是否正确"
+    echo "当前 IP: $(ip addr show | grep 'inet ' | grep -v '127\|192.168.254')"
+fi
